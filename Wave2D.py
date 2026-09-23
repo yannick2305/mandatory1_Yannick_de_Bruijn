@@ -8,7 +8,6 @@ x, y, t = sp.symbols("x,y,t")
 class Wave2D:
     """Class for solving the 2D wave equation"""
 
-
     def create_mesh(
         self, N: int, sparse: bool = False
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -26,7 +25,11 @@ class Wave2D:
             The x-coordinates of the mesh
         yij : 2D array
             The y-coordinates of the mesh"""
-        raise NotImplementedError("The create_mesh method is not implemented yet.")
+        self.N = N
+        self.h = 1.0 / N
+        xi = np.linspace(0, 1, N + 1)
+        self.xij, self.yij = np.meshgrid(xi, xi, indexing="ij", sparse=sparse)
+        return self.xij, self.yij
 
     def D2(self, N: int) -> sparse.lil_matrix:
         """Return second order differentiation matrix
@@ -40,12 +43,17 @@ class Wave2D:
         D : scipy sparse LIL matrix
             The second order differentiation matrix
         """
-        raise NotImplementedError("The D2 method is not implemented yet.")
+        # Boundary rows are irrelevant for Dirichlet conditions, since the
+        # boundary values are overwritten by apply_bcs after every step.
+        D = sparse.diags([1.0, -2.0, 1.0], [-1, 0, 1], (N + 1, N + 1), format="lil")
+        return D
 
     @property
     def w(self):
         """Return the dispersion coefficient"""
-        raise NotImplementedError("The w property is not implemented yet.")
+        kx = self.mx * np.pi
+        ky = self.my * np.pi
+        return self.c * np.sqrt(kx**2 + ky**2)
 
     def ue(self, mx: int, my: int) -> sp.Expr:
         """Return the exact standing wave
@@ -71,12 +79,22 @@ class Wave2D:
         mx, my : int
             Parameters for the standing wave
         """
-        raise NotImplementedError("The initialize method is not implemented yet.")
+        self.mx, self.my = mx, my
+        u0 = sp.lambdify((x, y), self.ue(mx, my).subs(t, 0))(self.xij, self.yij)
+        self.Unm1 = np.asarray(u0, dtype=float) * np.ones((N + 1, N + 1))
+        # Second-order accurate first step using u_t(0) = 0:
+        # U^1 = U^0 + 1/2 (c dt)^2 (D2x + D2y) U^0
+        D = self.D2(N) / self.h**2
+        self.Un = self.Unm1 + 0.5 * (self.c * self.dt) ** 2 * (
+            D @ self.Unm1 + self.Unm1 @ D.T
+        )
+        self.apply_bcs(self.Un)
+        return self.Un
 
     @property
     def dt(self) -> float:
         """Return the time step"""
-        raise NotImplementedError("The dt property is not implemented yet.")
+        return self.cfl * self.h / self.c
 
     def l2_error(self, u: np.ndarray, t0: float) -> float:
         """Return l2-error norm
@@ -88,7 +106,10 @@ class Wave2D:
         t0 : number
             The time of the comparison
         """
-        raise NotImplementedError("The l2_error method is not implemented yet.")
+        uj = sp.lambdify((x, y), self.ue(self.mx, self.my).subs(t, t0))(
+            self.xij, self.yij
+        )
+        return float(np.sqrt(self.h**2 * np.sum((uj - u) ** 2)))
 
     def apply_bcs(self, u: np.ndarray):
         """Apply boundary conditions to the solution mesh function
@@ -98,7 +119,10 @@ class Wave2D:
         u : array
             The solution mesh function
         """
-        raise NotImplementedError("The apply_bcs method is not implemented yet.")
+        u[0] = 0
+        u[-1] = 0
+        u[:, 0] = 0
+        u[:, -1] = 0
 
     def __call__(
         self,
@@ -134,7 +158,35 @@ class Wave2D:
         If store_data > 0, then return a dictionary with key, value = timestep, solution
         If store_data == -1, then return the two-tuple (h, l2-error)
         """
-        raise NotImplementedError("The __call__ method is not implemented yet.")
+        self.cfl = cfl
+        self.c = c
+        self.mx, self.my = mx, my
+        self.create_mesh(N)
+        self.initialize(N, mx, my)
+        D = self.D2(N) / self.h**2
+        dt = self.dt
+
+        data = {0: self.Unm1.copy()}
+        if store_data > 0 and 1 % store_data == 0:
+            data[1] = self.Un.copy()
+        errors = [self.l2_error(self.Un, dt)]
+
+        for n in range(1, Nt):
+            Unp1 = (
+                2 * self.Un
+                - self.Unm1
+                + (c * dt) ** 2 * (D @ self.Un + self.Un @ D.T)
+            )
+            self.apply_bcs(Unp1)
+            self.Unm1, self.Un = self.Un, Unp1
+            if store_data > 0 and (n + 1) % store_data == 0:
+                data[n + 1] = self.Un.copy()
+            elif store_data == -1:
+                errors.append(self.l2_error(self.Un, (n + 1) * dt))
+
+        if store_data > 0:
+            return data
+        return self.h, errors
 
     def convergence_rates(
         self, m: int = 4, cfl: float = 0.1, Nt: int = 10, mx: int = 3, my: int = 3
@@ -177,13 +229,19 @@ class Wave2D:
 
 class Wave2D_Neumann(Wave2D):
     def D2(self, N: int) -> sparse.lil_matrix:
-        raise NotImplementedError("The D2 method is not implemented yet.")
+        # Homogeneous Neumann conditions through ghost points: u_{-1} = u_1 and
+        # u_{N+1} = u_{N-1}, which doubles the inner neighbour on the boundary rows.
+        D = sparse.diags([1.0, -2.0, 1.0], [-1, 0, 1], (N + 1, N + 1), format="lil")
+        D[0, :2] = -2, 2
+        D[-1, -2:] = 2, -2
+        return D
 
     def ue(self, mx: int, my: int) -> sp.Expr:
-        raise NotImplementedError("The ue method is not implemented yet.")
+        return sp.cos(mx * sp.pi * x) * sp.cos(my * sp.pi * y) * sp.cos(self.w * t)
 
     def apply_bcs(self, u: np.ndarray):
-        raise NotImplementedError("The apply_bcs method is not implemented yet.")
+        # The Neumann conditions are built into D2, so nothing to do here.
+        pass
 
 
 def test_convergence_wave2d():
@@ -199,5 +257,9 @@ def test_convergence_wave2d_neumann():
 
 
 def test_exact_wave2d():
-    raise NotImplementedError("The test_exact_wave2d function is not implemented yet.")
-
+    # With mx = my and CFL = 1/sqrt(2) the discrete dispersion relation equals
+    # the exact one, so the scheme reproduces the solution to machine precision.
+    cfl = 1 / np.sqrt(2)
+    for solver in (Wave2D(), Wave2D_Neumann()):
+        _, err = solver(20, 20, cfl=cfl, mx=2, my=2, store_data=-1)
+        assert max(err) < 1e-12, (type(solver).__name__, max(err))
