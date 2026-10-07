@@ -80,3 +80,7 @@ and with $\Delta t = Ch/c = h/(\sqrt{2}\,c)$:
 ```math
 \tilde{\omega} = \frac{kh}{\Delta t} = \sqrt{2}\,c\,k = c\sqrt{k^2 + k^2} = c\sqrt{k_x^2 + k_y^2} = \omega.
 ```
+
+## 1.2.5 Genrate the Gif
+
+
